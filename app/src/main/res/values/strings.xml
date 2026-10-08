@@ -1,0 +1,4 @@
+<resources>
+    <string name="service_label">Jarvis - envio automático</string>
+    <string name="service_desc">Toca no botão Enviar do WhatsApp para mandar a mensagem automaticamente.</string>
+</resources>
