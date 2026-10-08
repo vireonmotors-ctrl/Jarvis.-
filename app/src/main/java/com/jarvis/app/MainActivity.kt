@@ -207,6 +207,10 @@ class MainActivity : Activity() {
                     saveContacts(list); reply("Apaguei $name.")
                 } else reply("Não achei $name nos contatos.")
             }
+            low == "depurar" -> {
+                reply(if (SenderService.lastDump.isBlank()) "Nada capturado ainda. Peça uma ligação primeiro."
+                else "Vi isto na tela do WhatsApp:\n" + SenderService.lastDump)
+            }
             videoM != null -> {
                 val c = findContact(videoM.groupValues[1])
                 if (c == null) reply("Não achei \"${videoM.groupValues[1]}\" nos contatos. Escreva: novo contato")
