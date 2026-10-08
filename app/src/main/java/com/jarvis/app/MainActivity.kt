@@ -77,7 +77,7 @@ class MainActivity : Activity() {
         root.addView(bottom)
         setContentView(root)
 
-        reply("Oi! Eu sou o Jarvis. 👋\nEscreva:\n• novo contato\n• contatos\n• mandar para NOME: mensagem\n• apagar NOME\nOu converse comigo sobre qualquer coisa.")
+        reply("Oi! Eu sou o Jarvis. 👋\nEscreva:\n• novo contato\n• contatos\n• mandar para NOME: mensagem\n• ligar para NOME\n• videochamada para NOME\n• apagar NOME\nOu converse comigo sobre qualquer coisa.")
     }
 
     override fun onResume() {
@@ -149,6 +149,15 @@ class MainActivity : Activity() {
         RegexOption.IGNORE_CASE
     )
 
+    private val callRegex = Regex(
+        "^(?:ligar|liga|ligue|chamar|chame|chama|telefonar)\\s+(?:para|pra|pro)\\s+(?:o\\s+|a\\s+)?(.+)$",
+        RegexOption.IGNORE_CASE
+    )
+    private val videoRegex = Regex(
+        "^(?:v[ií]deo\\s*chamada|chamada\\s+de\\s+v[ií]deo)\\s+(?:para|pra|pro)\\s+(?:o\\s+|a\\s+)?(.+)$",
+        RegexOption.IGNORE_CASE
+    )
+
     private fun handle(text: String) {
         addMsg(text, true)
         when (step) {
@@ -177,6 +186,8 @@ class MainActivity : Activity() {
 
         val low = text.lowercase().trim()
         val m = sendRegex.find(text.trim())
+        val videoM = videoRegex.find(text.trim())
+        val callM = callRegex.find(text.trim())
         when {
             low.contains("novo contato") || low.contains("salvar contato") ||
                 low.contains("salvar número") || low.contains("salvar numero") ||
@@ -195,6 +206,16 @@ class MainActivity : Activity() {
                 if (list.removeAll { it.name.equals(name, true) }) {
                     saveContacts(list); reply("Apaguei $name.")
                 } else reply("Não achei $name nos contatos.")
+            }
+            videoM != null -> {
+                val c = findContact(videoM.groupValues[1])
+                if (c == null) reply("Não achei \"${videoM.groupValues[1]}\" nos contatos. Escreva: novo contato")
+                else callWhatsApp(c, true)
+            }
+            callM != null -> {
+                val c = findContact(callM.groupValues[1])
+                if (c == null) reply("Não achei \"${callM.groupValues[1]}\" nos contatos. Escreva: novo contato")
+                else callWhatsApp(c, false)
             }
             m != null -> {
                 val c = findContact(m.groupValues[1])
@@ -218,11 +239,30 @@ class MainActivity : Activity() {
             try {
                 startActivity(Intent(Intent.ACTION_VIEW, uri).setPackage("com.whatsapp.w4b"))
             } catch (e2: ActivityNotFoundException) {
-                SenderService.pending = false
+                SenderService.mode = 0
                 reply("WhatsApp não encontrado."); return
             }
         }
         reply("Enviando para ${c.name}...")
+    }
+
+    private fun callWhatsApp(c: Contact, video: Boolean) {
+        if (!accessibilityOn()) {
+            reply("Ligue a acessibilidade primeiro (botão no topo)."); return
+        }
+        SenderService.armCall(video)
+        val uri = Uri.parse("https://wa.me/55${c.ddd}${c.number}")
+        try {
+            startActivity(Intent(Intent.ACTION_VIEW, uri).setPackage("com.whatsapp"))
+        } catch (e: ActivityNotFoundException) {
+            try {
+                startActivity(Intent(Intent.ACTION_VIEW, uri).setPackage("com.whatsapp.w4b"))
+            } catch (e2: ActivityNotFoundException) {
+                SenderService.mode = 0
+                reply("WhatsApp não encontrado."); return
+            }
+        }
+        reply(if (video) "Chamando ${c.name} por vídeo..." else "Ligando para ${c.name}...")
     }
 
     // ---------- IA ----------
@@ -257,7 +297,7 @@ class MainActivity : Activity() {
             "Responda curto, para caber na tela do celular. " +
             "Contatos salvos do usuário: ${if (names.isBlank()) "nenhum" else names}. " +
             "Se ele quiser mandar WhatsApp, diga para escrever: mandar para NOME: texto. " +
-            "Se quiser salvar um contato, diga para escrever: novo contato."
+            "Se quiser salvar um contato, diga para escrever: novo contato. Para ligar, diga para escrever: ligar para NOME."
         status.text = "Jarvis está pensando..."
         thread {
             try {
