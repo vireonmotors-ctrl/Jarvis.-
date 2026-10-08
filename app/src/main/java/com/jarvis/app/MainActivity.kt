@@ -7,7 +7,12 @@ import android.content.Context
 import android.content.Intent
 import android.net.Uri
 import android.os.Bundle
+import android.provider.AlarmClock
 import android.provider.Settings
+import android.speech.RecognizerIntent
+import java.text.SimpleDateFormat
+import java.util.Date
+import java.util.Locale
 import android.view.Gravity
 import android.view.ViewGroup
 import android.view.inputmethod.EditorInfo
@@ -67,8 +72,13 @@ class MainActivity : Activity() {
             text = "Enviar"
             setOnClickListener { submit() }
         }
+        val micBtn = Button(this).apply {
+            text = "🎤"
+            setOnClickListener { listen() }
+        }
         val bottom = LinearLayout(this).apply { orientation = LinearLayout.HORIZONTAL }
         bottom.addView(input, LinearLayout.LayoutParams(0, ViewGroup.LayoutParams.WRAP_CONTENT, 1f))
+        bottom.addView(micBtn)
         bottom.addView(sendBtn)
 
         root.addView(status)
@@ -77,7 +87,7 @@ class MainActivity : Activity() {
         root.addView(bottom)
         setContentView(root)
 
-        reply("Oi! Eu sou o Jarvis. 👋\nEscreva:\n• novo contato\n• contatos\n• mandar para NOME: mensagem\n• ligar para NOME\n• videochamada para NOME\n• apagar NOME\nOu converse comigo sobre qualquer coisa.")
+        reply("Oi! Eu sou o Jarvis. 👋\nEscreva:\n• novo contato\n• contatos\n• mandar para NOME: mensagem\n• ligar para NOME\n• videochamada para NOME\n• que horas são\n• alarme para 7:30\n• timer de 10 minutos\n• toque no 🎤 para falar\n• apagar NOME\nOu converse comigo sobre qualquer coisa.")
     }
 
     override fun onResume() {
@@ -226,6 +236,14 @@ class MainActivity : Activity() {
                 if (c == null) reply("Não achei \"${m.groupValues[1]}\" nos contatos. Escreva: novo contato")
                 else sendWhatsApp(c, m.groupValues[2].trim())
             }
+            low.contains("que horas são") || low.contains("que horas sao") ||
+                low.contains("hora certa") || low == "horas" || low.startsWith("que horas") ->
+                reply("Agora são ${SimpleDateFormat("HH:mm", Locale("pt", "BR")).format(Date())}.")
+            low.contains("que dia é hoje") || low.contains("que dia e hoje") || low.contains("data de hoje") ->
+                reply("Hoje é ${SimpleDateFormat("EEEE, d 'de' MMMM 'de' yyyy", Locale("pt", "BR")).format(Date())}.")
+            low.contains("timer") || low.contains("temporizador") || low.contains("daqui a") -> setTimer(low)
+            low.contains("alarme") || low.contains("despertador") ||
+                low.contains("me acorde") || low.contains("me acorda") -> setAlarm(low)
             else -> askAi(text)
         }
     }
@@ -269,6 +287,71 @@ class MainActivity : Activity() {
         reply(if (video) "Chamando ${c.name} por vídeo..." else "Ligando para ${c.name}...")
     }
 
+    // ---------- voz, alarme e timer ----------
+    private fun listen() {
+        val i = Intent(RecognizerIntent.ACTION_RECOGNIZE_SPEECH).apply {
+            putExtra(RecognizerIntent.EXTRA_LANGUAGE_MODEL, RecognizerIntent.LANGUAGE_MODEL_FREE_FORM)
+            putExtra(RecognizerIntent.EXTRA_LANGUAGE, "pt-BR")
+            putExtra(RecognizerIntent.EXTRA_PROMPT, "Pode falar")
+        }
+        try {
+            startActivityForResult(i, 77)
+        } catch (e: Exception) {
+            reply("Este celular não tem o reconhecimento de voz do Google. Use o microfone do teclado.")
+        }
+    }
+
+    override fun onActivityResult(requestCode: Int, resultCode: Int, data: Intent?) {
+        super.onActivityResult(requestCode, resultCode, data)
+        if (requestCode == 77 && resultCode == RESULT_OK) {
+            val t = data?.getStringArrayListExtra(RecognizerIntent.EXTRA_RESULTS)?.firstOrNull()
+            if (!t.isNullOrBlank()) handle(t)
+        }
+    }
+
+    private fun setAlarm(low: String) {
+        val m = Regex("(\\d{1,2})(?:\\s*(?::|h|horas?\\s*e?|\\s+e)\\s*(\\d{1,2}))?").find(low)
+        if (m == null) { reply("Diga a hora. Exemplo: alarme para 7:30"); return }
+        var h = m.groupValues[1].toInt()
+        var min = m.groupValues[2].ifEmpty { "0" }.toInt()
+        if (low.contains("e meia")) min = 30
+        if ((low.contains("da tarde") || low.contains("da noite")) && h < 12) h += 12
+        if (h > 23 || min > 59) { reply("Essa hora não existe. Exemplo: alarme para 7:30"); return }
+        val i = Intent(AlarmClock.ACTION_SET_ALARM)
+            .putExtra(AlarmClock.EXTRA_HOUR, h)
+            .putExtra(AlarmClock.EXTRA_MINUTES, min)
+            .putExtra(AlarmClock.EXTRA_MESSAGE, "Jarvis")
+            .putExtra(AlarmClock.EXTRA_SKIP_UI, true)
+        try {
+            startActivity(i)
+            reply("Alarme marcado para %02d:%02d ⏰ (para apagar, use o app Relógio)".format(h, min))
+        } catch (e: Exception) {
+            reply("Não consegui criar o alarme: ${e.message}")
+        }
+    }
+
+    private fun setTimer(low: String) {
+        val m = Regex("(\\d+)\\s*(horas?|h|minutos?|min|segundos?|seg)").find(low)
+        if (m == null) { reply("Diga o tempo. Exemplo: timer de 10 minutos"); return }
+        val n = m.groupValues[1].toInt()
+        val unit = m.groupValues[2]
+        val secs = when {
+            unit.startsWith("h") -> n * 3600
+            unit.startsWith("m") -> n * 60
+            else -> n
+        }
+        val i = Intent(AlarmClock.ACTION_SET_TIMER)
+            .putExtra(AlarmClock.EXTRA_LENGTH, secs)
+            .putExtra(AlarmClock.EXTRA_MESSAGE, "Jarvis")
+            .putExtra(AlarmClock.EXTRA_SKIP_UI, true)
+        try {
+            startActivity(i)
+            reply("Timer de $n ${m.groupValues[2]} iniciado ⏱️")
+        } catch (e: Exception) {
+            reply("Não consegui criar o timer: ${e.message}")
+        }
+    }
+
     // ---------- IA ----------
     private fun askKey() {
         val et = EditText(this).apply {
@@ -301,7 +384,7 @@ class MainActivity : Activity() {
             "Responda curto, para caber na tela do celular. " +
             "Contatos salvos do usuário: ${if (names.isBlank()) "nenhum" else names}. " +
             "Se ele quiser mandar WhatsApp, diga para escrever: mandar para NOME: texto. " +
-            "Se quiser salvar um contato, diga para escrever: novo contato. Para ligar, diga para escrever: ligar para NOME."
+            "Se quiser salvar um contato, diga para escrever: novo contato. Para ligar, diga para escrever: ligar para NOME. Para alarme, diga: alarme para 7:30. Para saber as horas, diga: que horas são."
         status.text = "Jarvis está pensando..."
         thread {
             try {
