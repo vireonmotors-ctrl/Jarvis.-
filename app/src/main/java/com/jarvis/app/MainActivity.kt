@@ -10,6 +10,7 @@ import android.os.Bundle
 import android.provider.AlarmClock
 import android.provider.Settings
 import android.speech.RecognizerIntent
+import android.speech.tts.TextToSpeech
 import java.text.SimpleDateFormat
 import java.util.Date
 import java.util.Locale
@@ -37,16 +38,34 @@ class MainActivity : Activity() {
     private var tmpName = ""
     private var tmpDdd = ""
     private val history = JSONArray()
+    private var tts: TextToSpeech? = null
+    private var ttsReady = false
+    private var speakOn = true
 
     private fun dp(v: Int) = (v * resources.displayMetrics.density).toInt()
 
     override fun onCreate(savedInstanceState: Bundle?) {
         super.onCreate(savedInstanceState)
+        tts = TextToSpeech(this) { st ->
+            if (st == TextToSpeech.SUCCESS) {
+                tts?.language = Locale("pt", "BR")
+                val vs = ptVoices()
+                val idx = prefs.getInt("voiceIdx", -1)
+                val chosen = if (idx in vs.indices) vs[idx]
+                else vs.firstOrNull {
+                    val n = it.name.lowercase()
+                    n.contains("ptd") || (n.contains("male") && !n.contains("female"))
+                } ?: vs.firstOrNull()
+                chosen?.let { tts?.voice = it }
+                tts?.setPitch(0.85f)
+                ttsReady = true
+            }
+        }
         val root = LinearLayout(this).apply {
             orientation = LinearLayout.VERTICAL
             setPadding(dp(12), dp(36), dp(12), dp(8))
         }
-        status = TextView(this).apply { textSize = 14f }
+        status = TextView(this).apply { textSize = 12f }
         val top = LinearLayout(this).apply { orientation = LinearLayout.HORIZONTAL }
         val accBtn = Button(this).apply {
             text = "Acessibilidade"
@@ -87,7 +106,7 @@ class MainActivity : Activity() {
         root.addView(bottom)
         setContentView(root)
 
-        reply("Oi! Eu sou o Jarvis. 👋\nEscreva:\n• novo contato\n• contatos\n• mandar para NOME: mensagem\n• ligar para NOME\n• videochamada para NOME\n• que horas são\n• alarme para 7:30\n• timer de 10 minutos\n• toque no 🎤 para falar\n• apagar NOME\nOu converse comigo sobre qualquer coisa.")
+        reply("Oi! Eu sou o Jarvis. Toque no 🎤 ou escreva: novo contato, mandar para NOME: texto, ligar para NOME, alarme para 7:30, que horas são.", false)
     }
 
     override fun onResume() {
@@ -130,7 +149,7 @@ class MainActivity : Activity() {
     private fun addMsg(text: String, me: Boolean) {
         val tv = TextView(this).apply {
             this.text = text
-            textSize = 17f
+            textSize = 14f
             setTextColor(0xFF111111.toInt())
             setBackgroundColor(if (me) 0xFFDCF8C6.toInt() else 0xFFE8EAF0.toInt())
             setPadding(dp(10), dp(8), dp(10), dp(8))
@@ -145,7 +164,35 @@ class MainActivity : Activity() {
         scroll.post { scroll.fullScroll(ScrollView.FOCUS_DOWN) }
     }
 
-    private fun reply(text: String) = addMsg(text, false)
+    private fun reply(text: String, voice: Boolean = true) {
+        addMsg(text, false)
+        if (voice) say(text)
+    }
+
+    private fun say(text: String) {
+        if (!speakOn || !ttsReady) return
+        val clean = text.replace(Regex("[^\\p{L}\\p{N}\\s.,!?:;()'\"-]"), " ")
+        tts?.speak(clean, TextToSpeech.QUEUE_FLUSH, null, "jarvis")
+    }
+
+    private fun ptVoices() = (tts?.voices ?: emptySet())
+        .filter { it.locale.language == "pt" && it.locale.country == "BR" }
+        .sortedBy { it.name }
+
+    private fun changeVoice() {
+        val vs = ptVoices()
+        if (vs.isEmpty()) { reply("Não encontrei vozes em português neste celular."); return }
+        val next = (prefs.getInt("voiceIdx", -1) + 1) % vs.size
+        prefs.edit().putInt("voiceIdx", next).apply()
+        tts?.voice = vs[next]
+        reply("Voz ${next + 1} de ${vs.size}. Se não for de homem, escreva: trocar voz")
+    }
+
+    override fun onDestroy() {
+        tts?.stop()
+        tts?.shutdown()
+        super.onDestroy()
+    }
 
     private fun submit() {
         val t = input.text.toString().trim()
@@ -219,7 +266,7 @@ class MainActivity : Activity() {
             }
             low == "depurar" -> {
                 reply(if (SenderService.lastDump.isBlank()) "Nada capturado ainda. Peça uma ligação primeiro."
-                else "Vi isto na tela do WhatsApp:\n" + SenderService.lastDump)
+                else "Vi isto na tela do WhatsApp:\n" + SenderService.lastDump, false)
             }
             videoM != null -> {
                 val c = findContact(videoM.groupValues[1])
@@ -236,6 +283,13 @@ class MainActivity : Activity() {
                 if (c == null) reply("Não achei \"${m.groupValues[1]}\" nos contatos. Escreva: novo contato")
                 else sendWhatsApp(c, m.groupValues[2].trim())
             }
+            low == "silêncio" || low == "silencio" || low == "calar" || low == "desligar voz" -> {
+                speakOn = false
+                tts?.stop()
+                addMsg("Voz desligada. Escreva \"ligar voz\" para voltar.", false)
+            }
+            low == "ligar voz" -> { speakOn = true; reply("Voz ligada.") }
+            low == "trocar voz" -> changeVoice()
             low.contains("que horas são") || low.contains("que horas sao") ||
                 low.contains("hora certa") || low == "horas" || low.startsWith("que horas") ->
                 reply("Agora são ${SimpleDateFormat("HH:mm", Locale("pt", "BR")).format(Date())}.")
@@ -289,6 +343,7 @@ class MainActivity : Activity() {
 
     // ---------- voz, alarme e timer ----------
     private fun listen() {
+        tts?.stop()
         val i = Intent(RecognizerIntent.ACTION_RECOGNIZE_SPEECH).apply {
             putExtra(RecognizerIntent.EXTRA_LANGUAGE_MODEL, RecognizerIntent.LANGUAGE_MODEL_FREE_FORM)
             putExtra(RecognizerIntent.EXTRA_LANGUAGE, "pt-BR")
@@ -430,3 +485,4 @@ class MainActivity : Activity() {
         return sb.toString()
     }
 }
+        
